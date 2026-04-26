@@ -13,6 +13,7 @@ import { SSEProgressModal } from '../components/SSEProgressModal';
 import ChapterReader from '../components/ChapterReader';
 import PartialRegenerateToolbar from '../components/PartialRegenerateToolbar';
 import PartialRegenerateModal from '../components/PartialRegenerateModal';
+import ChapterContentComparison from '../components/ChapterContentComparison';
 
 const { TextArea } = Input;
 
@@ -46,7 +47,7 @@ const setCachedWordCount = (value: number): void => {
 };
 
 export default function Chapters() {
-  const { currentProject, chapters, outlines, setCurrentChapter, setCurrentProject } = useStore();
+  const { currentProject, chapters, outlines, currentChapter, setCurrentChapter, setCurrentProject } = useStore();
   const [modal, contextHolder] = Modal.useModal();
   const { token } = theme.useToken();
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -96,6 +97,9 @@ export default function Chapters() {
   // 单章节生成进度状态
   const [singleChapterProgress, setSingleChapterProgress] = useState(0);
   const [singleChapterProgressMessage, setSingleChapterProgressMessage] = useState('');
+  const [generationComparisonVisible, setGenerationComparisonVisible] = useState(false);
+  const [generationComparisonOriginalContent, setGenerationComparisonOriginalContent] = useState('');
+  const [generationComparisonNewContent, setGenerationComparisonNewContent] = useState('');
 
   // 批量生成相关状态
   const [batchGenerateVisible, setBatchGenerateVisible] = useState(false);
@@ -814,23 +818,37 @@ export default function Chapters() {
     if (!editingId) return;
 
     try {
+      const persistedTitle = String(currentChapter?.title || '');
+      const persistedContent = String(currentChapter?.content || '');
+      const editorTitle = String(editorForm.getFieldValue('title') || persistedTitle);
+      const editorContent = String(editorForm.getFieldValue('content') || persistedContent);
+
+      if (editorTitle !== persistedTitle || editorContent !== persistedContent) {
+        message.warning('请先保存当前章节的标题或内容修改，再进行 AI 创作');
+        return;
+      }
+
       setIsContinuing(true);
       setIsGenerating(true);
       setSingleChapterProgress(0);
       setSingleChapterProgressMessage('准备开始生成...');
+      const originalContent = persistedContent;
+      const previewOnly = originalContent.trim().length > 0;
 
       const result = await generateChapterContentStream(
         editingId,
-        (content) => {
-          editorForm.setFieldsValue({ content });
+        previewOnly
+          ? undefined
+          : (content) => {
+              editorForm.setFieldsValue({ content });
 
-          if (contentTextAreaRef.current) {
-            const textArea = contentTextAreaRef.current.resizableTextArea?.textArea;
-            if (textArea) {
-              textArea.scrollTop = textArea.scrollHeight;
-            }
-          }
-        },
+              if (contentTextAreaRef.current) {
+                const textArea = contentTextAreaRef.current.resizableTextArea?.textArea;
+                if (textArea) {
+                  textArea.scrollTop = textArea.scrollHeight;
+                }
+              }
+            },
         selectedStyleId,
         targetWordCount,
         (progressMsg, progressValue) => {
@@ -839,8 +857,17 @@ export default function Chapters() {
           setSingleChapterProgressMessage(progressMsg);
         },
         selectedModel,  // 传递选中的模型
-        temporaryNarrativePerspective  // 传递临时人称参数
+        temporaryNarrativePerspective,  // 传递临时人称参数
+        previewOnly
       );
+
+      if (previewOnly && !result.saved) {
+        setGenerationComparisonOriginalContent(originalContent);
+        setGenerationComparisonNewContent(result.content);
+        setGenerationComparisonVisible(true);
+        message.success('AI 创作预览完成，请确认是否应用新内容');
+        return;
+      }
 
       message.success('AI创作成功，正在分析章节内容...');
 
@@ -3010,6 +3037,39 @@ export default function Chapters() {
           />
         );
       })()}
+
+      {editingId && generationComparisonVisible && currentChapter && (
+        <ChapterContentComparison
+          visible={generationComparisonVisible}
+          onClose={() => setGenerationComparisonVisible(false)}
+          chapterId={editingId}
+          chapterTitle={currentChapter.title}
+          originalContent={generationComparisonOriginalContent}
+          newContent={generationComparisonNewContent}
+          wordCount={generationComparisonNewContent.length}
+          onApply={async () => {
+            await refreshChapters();
+
+            const updatedChapter = await chapterApi.getChapter(editingId);
+            setCurrentChapter(updatedChapter);
+            editorForm.setFieldsValue({
+              title: updatedChapter.title,
+              content: updatedChapter.content,
+            });
+
+            if (currentProject) {
+              const updatedProject = await projectApi.getProject(currentProject.id);
+              setCurrentProject(updatedProject);
+            }
+
+            startPollingTask(editingId);
+          }}
+          onDiscard={() => {
+            editorForm.setFieldsValue({ content: generationComparisonOriginalContent });
+            setGenerationComparisonNewContent('');
+          }}
+        />
+      )}
     </div>
   );
 }

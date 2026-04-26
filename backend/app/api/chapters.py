@@ -1340,6 +1340,7 @@ async def generate_chapter_content_stream(
     target_word_count = generate_request.target_word_count or 3000
     custom_model = generate_request.model if hasattr(generate_request, 'model') else None
     temp_narrative_perspective = generate_request.narrative_perspective if hasattr(generate_request, 'narrative_perspective') else None
+    preview_only = bool(getattr(generate_request, "preview_only", False))
     # 预先验证章节存在性（使用临时会话）
     async for temp_db in get_db(request):
         try:
@@ -1677,96 +1678,109 @@ async def generate_chapter_content_stream(
                     
                     await asyncio.sleep(0)  # 让出控制权
                 
-                # === 保存阶段 ===
-                yield await tracker.saving("正在保存章节...", 0.3)
-                
-                # 更新章节内容到数据库
                 old_word_count = current_chapter.word_count or 0
-                current_chapter.content = full_content
                 new_word_count = len(full_content)
-                current_chapter.word_count = new_word_count
-                current_chapter.status = "completed"
                 
-                # 更新项目字数
-                project.current_words = project.current_words - old_word_count + new_word_count
-                
-                # 记录生成历史
-                history = GenerationHistory(
-                    project_id=current_chapter.project_id,
-                    chapter_id=current_chapter.id,
-                    prompt=f"创作章节: 第{current_chapter.chapter_number}章 {current_chapter.title}",
-                    generated_content=full_content[:500] if len(full_content) > 500 else full_content,
-                    model="default"
-                )
-                db_session.add(history)
-                
-                await db_session.commit()
-                db_committed = True
-                await db_session.refresh(current_chapter)
-                
-                logger.info(f"成功创作章节 {chapter_id}，共 {new_word_count} 字")
-                
-                # 🔮 章节生成后自动标记计划在本章埋入的伏笔
-                try:
-                    plant_result = await foreshadow_service.auto_plant_pending_foreshadows(
-                        db=db_session,
-                        project_id=project.id,
-                        chapter_id=chapter_id,
-                        chapter_number=current_chapter.chapter_number,
-                        chapter_content=full_content
+                if preview_only:
+                    logger.info(f"成功生成章节预览 {chapter_id}，共 {new_word_count} 字")
+                    yield await tracker.saving("生成完成，正在准备对比预览...", 0.8)
+                    yield await tracker.complete("创作预览完成！")
+                    yield await tracker.result({
+                        'word_count': new_word_count,
+                        'saved': False,
+                        'preview_only': True,
+                        'original_word_count': old_word_count,
+                    })
+                else:
+                    # === 保存阶段 ===
+                    yield await tracker.saving("正在保存章节...", 0.3)
+                    
+                    # 更新章节内容到数据库
+                    current_chapter.content = full_content
+                    current_chapter.word_count = new_word_count
+                    current_chapter.status = "completed"
+                    
+                    # 更新项目字数
+                    project.current_words = project.current_words - old_word_count + new_word_count
+                    
+                    # 记录生成历史
+                    history = GenerationHistory(
+                        project_id=current_chapter.project_id,
+                        chapter_id=current_chapter.id,
+                        prompt=f"创作章节: 第{current_chapter.chapter_number}章 {current_chapter.title}",
+                        generated_content=full_content[:500] if len(full_content) > 500 else full_content,
+                        model="default"
                     )
-                    if plant_result.get('planted_count', 0) > 0:
-                        logger.info(f"🔮 自动标记伏笔已埋入: {plant_result['planted_count']}个")
-                except Exception as plant_error:
-                    logger.warning(f"⚠️ 自动标记伏笔埋入失败: {str(plant_error)}")
-                
-                # 创建分析任务
-                analysis_task = AnalysisTask(
-                    chapter_id=chapter_id,
-                    user_id=current_user_id,
-                    project_id=project.id,
-                    status='pending',
-                    progress=0
-                )
-                db_session.add(analysis_task)
-                await db_session.commit()
-                await db_session.refresh(analysis_task)
-                
-                task_id = analysis_task.id
-                logger.info(f"📋 已创建分析任务: {task_id}")
-                
-                # 短暂延迟确保SQLite WAL完成写入
-                await asyncio.sleep(0.05)
-                
-                # 直接启动后台分析（并发执行）
-                background_tasks.add_task(
-                    analyze_chapter_background,
-                    chapter_id=chapter_id,
-                    user_id=current_user_id,
-                    project_id=project.id,
-                    task_id=task_id,
-                    ai_service=user_ai_service
-                )
-                
-                yield await tracker.saving("章节保存完成", 0.8)
-                
-                # === 完成阶段 ===
-                yield await tracker.complete("创作完成！")
-                
-                # 发送结果数据
-                yield await tracker.result({
-                    'word_count': new_word_count,
-                    'analysis_task_id': task_id
-                })
-                
-                # 发送分析开始事件（使用自定义事件）
-                yield await SSEResponse.send_event(
-                    event='analysis_started',
-                    data={
-                        'task_id': task_id,
-                        'message': '章节分析已开始'
-                    }
-                )
+                    db_session.add(history)
+                    
+                    await db_session.commit()
+                    db_committed = True
+                    await db_session.refresh(current_chapter)
+                    
+                    logger.info(f"成功创作章节 {chapter_id}，共 {new_word_count} 字")
+                    
+                    # 🔮 章节生成后自动标记计划在本章埋入的伏笔
+                    try:
+                        plant_result = await foreshadow_service.auto_plant_pending_foreshadows(
+                            db=db_session,
+                            project_id=project.id,
+                            chapter_id=chapter_id,
+                            chapter_number=current_chapter.chapter_number,
+                            chapter_content=full_content
+                        )
+                        if plant_result.get('planted_count', 0) > 0:
+                            logger.info(f"🔮 自动标记伏笔已埋入: {plant_result['planted_count']}个")
+                    except Exception as plant_error:
+                        logger.warning(f"⚠️ 自动标记伏笔埋入失败: {str(plant_error)}")
+                    
+                    # 创建分析任务
+                    analysis_task = AnalysisTask(
+                        chapter_id=chapter_id,
+                        user_id=current_user_id,
+                        project_id=project.id,
+                        status='pending',
+                        progress=0
+                    )
+                    db_session.add(analysis_task)
+                    await db_session.commit()
+                    await db_session.refresh(analysis_task)
+                    
+                    task_id = analysis_task.id
+                    logger.info(f"📋 已创建分析任务: {task_id}")
+                    
+                    # 短暂延迟确保SQLite WAL完成写入
+                    await asyncio.sleep(0.05)
+                    
+                    # 直接启动后台分析（并发执行）
+                    background_tasks.add_task(
+                        analyze_chapter_background,
+                        chapter_id=chapter_id,
+                        user_id=current_user_id,
+                        project_id=project.id,
+                        task_id=task_id,
+                        ai_service=user_ai_service
+                    )
+                    
+                    yield await tracker.saving("章节保存完成", 0.8)
+                    
+                    # === 完成阶段 ===
+                    yield await tracker.complete("创作完成！")
+                    
+                    # 发送结果数据
+                    yield await tracker.result({
+                        'word_count': new_word_count,
+                        'analysis_task_id': task_id,
+                        'saved': True,
+                    })
+                    
+                    # 发送分析开始事件（使用自定义事件）
+                    yield await SSEResponse.send_event(
+                        event='analysis_started',
+                        data={
+                            'task_id': task_id,
+                            'message': '章节分析已开始'
+                        }
+                    )
                 
                 # 发送完成信号
                 yield await tracker.done()
@@ -4040,4 +4054,3 @@ async def apply_partial_regenerate(
         "old_word_count": old_word_count,
         "message": "局部重写已应用"
     }
-

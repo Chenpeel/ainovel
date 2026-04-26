@@ -102,6 +102,7 @@ class Settings(BaseSettings):
     LOCAL_AUTH_USERNAME: Optional[str] = None  # 本地登录用户名
     LOCAL_AUTH_PASSWORD: Optional[str] = None  # 本地登录密码
     LOCAL_AUTH_DISPLAY_NAME: str = "本地用户"  # 本地用户显示名称
+    AUTO_LOGIN_ENABLED: bool = False  # 仅供本地自用的自动登录开关
     
     # 会话配置
     SESSION_EXPIRE_MINUTES: int = 120  # 会话过期时间（分钟），默认2小时

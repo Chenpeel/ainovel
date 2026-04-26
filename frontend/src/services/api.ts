@@ -156,10 +156,14 @@ export const authApi = {
     linuxdo_enabled: boolean;
     email_auth_enabled: boolean;
     email_register_enabled: boolean;
+    auto_login_enabled: boolean;
   }>('/auth/config'),
 
   localLogin: (username: string, password: string) =>
     api.post<unknown, { success: boolean; message: string; user: User }>('/auth/local/login', { username, password }),
+
+  autoLogin: () =>
+    api.post<unknown, { success: boolean; message: string; user: User }>('/auth/auto-login'),
 
   bindAccountLogin: (username: string, password: string) =>
     api.post<unknown, { success: boolean; message: string; user: User }>('/auth/bind/login', { username, password }),

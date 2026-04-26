@@ -313,8 +313,8 @@ services:
       - DEFAULT_TEMPERATURE=${DEFAULT_TEMPERATURE:-0.7}
       - DEFAULT_MAX_TOKENS=${DEFAULT_MAX_TOKENS:-32000}
       # LinuxDO OAuth 配置
-      - LINUXDO_CLIENT_ID=${LINUXDO_CLIENT_ID:-11111}
-      - LINUXDO_CLIENT_SECRET=${LINUXDO_CLIENT_SECRET:-11111}
+      - LINUXDO_CLIENT_ID=${LINUXDO_CLIENT_ID:-}
+      - LINUXDO_CLIENT_SECRET=${LINUXDO_CLIENT_SECRET:-}
       - LINUXDO_REDIRECT_URI=${LINUXDO_REDIRECT_URI:-http://localhost:8000/api/auth/linuxdo/callback}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:8000}
       # 本地账户登录配置
@@ -428,6 +428,52 @@ DEFAULT_MODEL=gpt-4o-mini
 LOCAL_AUTH_ENABLED=true
 LOCAL_AUTH_USERNAME=admin
 LOCAL_AUTH_PASSWORD=your_password
+AUTO_LOGIN_ENABLED=false
+```
+
+### 个人本地自用推荐配置
+
+如果你只是自己在本机用，建议在**源码本地启动**模式下，直接关闭第三方登录和邮箱登录，并启用自动登录：
+
+```bash
+# 只监听本机
+APP_HOST=127.0.0.1
+DEBUG=true
+FRONTEND_URL=http://localhost:8000
+CORS_ORIGINS=["http://localhost:8000","http://127.0.0.1:8000"]
+
+# 本地数据库
+DATABASE_URL=sqlite+aiosqlite:///./data/mumuai.db
+
+# 只保留本地账号
+LOCAL_AUTH_ENABLED=true
+LOCAL_AUTH_USERNAME=me
+LOCAL_AUTH_PASSWORD=change_this_password
+LOCAL_AUTH_DISPLAY_NAME=我的本地账号
+AUTO_LOGIN_ENABLED=true
+
+# 关闭可选登录方式
+LINUXDO_CLIENT_ID=
+LINUXDO_CLIENT_SECRET=
+LINUXDO_REDIRECT_URI=
+EMAIL_AUTH_ENABLED=false
+EMAIL_REGISTER_ENABLED=false
+```
+
+首次切到 SQLite 后需要执行：
+
+```bash
+cd backend
+alembic -c alembic-sqlite.ini upgrade head
+```
+
+如果你使用 Docker，请保持容器内 `APP_HOST=0.0.0.0`，
+并把 `docker-compose.yml` 的端口映射改成：
+
+```yaml
+ports:
+  - "127.0.0.1:8000:8000"
+  - "127.0.0.1:5432:5432"
 ```
 
 ### 可选配置

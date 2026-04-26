@@ -303,6 +303,12 @@ export default function SettingsPage() {
       defaultUrl: mumuTextDefaultUrl,
       defaultModel: 'gemini-3-flash-preview'
     },
+    {
+      value: 'deepseek',
+      label: 'DeepSeek',
+      defaultUrl: 'https://api.deepseek.com',
+      defaultModel: 'deepseek-v4-flash'
+    },
     { value: 'openai', label: 'OpenAI Compatible', defaultUrl: 'https://api.openai.com/v1' },
     // { value: 'anthropic', label: 'Anthropic (Claude)', defaultUrl: 'https://api.anthropic.com' },
     { value: 'gemini', label: 'Google Gemini', defaultUrl: 'https://generativelanguage.googleapis.com/v1beta' },
@@ -319,9 +325,11 @@ export default function SettingsPage() {
       if (provider.defaultUrl) {
         nextValues.api_base_url = provider.defaultUrl;
       }
+      if (provider.defaultModel) {
+        nextValues.llm_model = provider.defaultModel;
+      }
       if (provider.value === 'mumu') {
         nextValues.api_key = '';
-        nextValues.llm_model = provider.defaultModel || 'gemini-3-flash-preview';
       }
       form.setFieldsValue(nextValues);
     }
@@ -608,9 +616,11 @@ export default function SettingsPage() {
       if (provider.defaultUrl) {
         nextValues.api_base_url = provider.defaultUrl;
       }
+      if (provider.defaultModel) {
+        nextValues.llm_model = provider.defaultModel;
+      }
       if (provider.value === 'mumu') {
         nextValues.api_key = '';
-        nextValues.llm_model = provider.defaultModel || 'gemini-3-flash-preview';
       }
       presetForm.setFieldsValue(nextValues);
     }
@@ -899,6 +909,8 @@ export default function SettingsPage() {
     switch (provider) {
       case 'openai':
         return 'blue';
+      case 'deepseek':
+        return 'volcano';
       // case 'anthropic':
       //   return 'purple';
       case 'gemini':
@@ -1825,9 +1837,11 @@ export default function SettingsPage() {
                   style={{ marginBottom: 16 }}
                 >
                   <Select placeholder="选择提供商" onChange={handlePresetProviderChange}>
-                    <Select.Option value="mumu">MuMuのAPI</Select.Option>
-                    <Select.Option value="openai">OpenAI</Select.Option>
-                    <Select.Option value="gemini">Google Gemini</Select.Option>
+                    {apiProviders.map((provider) => (
+                      <Select.Option key={provider.value} value={provider.value}>
+                        {provider.label}
+                      </Select.Option>
+                    ))}
                   </Select>
                 </Form.Item>
 

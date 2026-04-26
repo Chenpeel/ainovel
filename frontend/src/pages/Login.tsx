@@ -39,6 +39,7 @@ interface AuthConfig {
   linuxdo_enabled: boolean;
   email_auth_enabled: boolean;
   email_register_enabled: boolean;
+  auto_login_enabled: boolean;
 }
 
 interface LocalLoginValues {
@@ -76,6 +77,7 @@ export default function Login() {
     linuxdo_enabled: false,
     email_auth_enabled: false,
     email_register_enabled: false,
+    auto_login_enabled: false,
   });
   const [localForm] = Form.useForm<LocalLoginValues>();
   const [emailLoginForm] = Form.useForm<EmailLoginValues>();
@@ -138,6 +140,19 @@ export default function Login() {
         try {
           const config = await authApi.getAuthConfig();
           setAuthConfig(config);
+
+          if (config.auto_login_enabled) {
+            try {
+              const response = await authApi.autoLogin();
+              if (response.success) {
+                const redirect = searchParams.get('redirect') || '/';
+                navigate(redirect, { replace: true });
+                return;
+              }
+            } catch (autoLoginError) {
+              console.error('自动登录失败:', autoLoginError);
+            }
+          }
         } catch (error) {
           console.error('获取认证配置失败:', error);
           setAuthConfig({
@@ -145,6 +160,7 @@ export default function Login() {
             linuxdo_enabled: true,
             email_auth_enabled: false,
             email_register_enabled: false,
+            auto_login_enabled: false,
           });
         }
         setChecking(false);

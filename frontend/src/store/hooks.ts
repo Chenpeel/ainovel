@@ -288,7 +288,8 @@ export function useChapterSync() {
     targetWordCount?: number,
     onProgressUpdate?: (message: string, progress: number) => void,
     model?: string,
-    narrativePerspective?: string
+    narrativePerspective?: string,
+    previewOnly: boolean = false
   ) => {
     try {
       // 使用fetch处理流式响应
@@ -301,7 +302,8 @@ export function useChapterSync() {
           style_id: styleId,
           target_word_count: targetWordCount,
           model: model,
-          narrative_perspective: narrativePerspective
+          narrative_perspective: narrativePerspective,
+          preview_only: previewOnly,
         }),
       });
 
@@ -319,6 +321,7 @@ export function useChapterSync() {
       let buffer = '';
       let fullContent = '';
       let analysisTaskId: string | undefined;
+      let savedToServer = !previewOnly;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -368,12 +371,17 @@ export function useChapterSync() {
                 if (message.data?.analysis_task_id) {
                   analysisTaskId = message.data.analysis_task_id;
                 }
+                if (typeof message.data?.saved === 'boolean') {
+                  savedToServer = message.data.saved;
+                }
                 if (onProgressUpdate) {
                   onProgressUpdate('生成完成', 100);
                 }
               } else if (message.type === 'done') {
                 // 生成完成，刷新章节数据
-                await refreshChapters();
+                if (savedToServer) {
+                  await refreshChapters();
+                }
               } else if (message.type === 'analysis_started') {
                 // 分析已开始
                 analysisTaskId = message.task_id;
@@ -393,7 +401,8 @@ export function useChapterSync() {
 
       return {
         content: fullContent,
-        analysis_task_id: analysisTaskId
+        analysis_task_id: analysisTaskId,
+        saved: savedToServer,
       };
     } catch (error) {
       console.error('AI流式生成章节内容失败:', error);

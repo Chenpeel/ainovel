@@ -121,6 +121,7 @@ class ChapterGenerateRequest(BaseModel):
     enable_mcp: bool = Field(True, description="是否启用MCP工具增强（搜索参考资料）")
     model: Optional[str] = Field(None, description="指定使用的AI模型，不提供则使用用户默认模型")
     narrative_perspective: Optional[str] = Field(None, description="临时人称视角：first_person/third_person/omniscient，不提供则使用项目默认")
+    preview_only: bool = Field(False, description="仅生成预览结果，不直接保存到章节")
 
 
 class BatchGenerateRequest(BaseModel):

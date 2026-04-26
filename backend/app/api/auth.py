@@ -324,6 +324,35 @@ def _validate_verification_scene(scene: str) -> str:
     return normalized_scene
 
 
+async def _ensure_local_env_user() -> UserDTO:
+    """确保 .env 中声明的本地账号存在，供自动登录复用。"""
+    if not settings.LOCAL_AUTH_ENABLED:
+        raise HTTPException(status_code=403, detail="本地账户登录未启用")
+
+    username = (settings.LOCAL_AUTH_USERNAME or "").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="未配置 LOCAL_AUTH_USERNAME，无法自动登录")
+
+    user_id = f"local_{hashlib.md5(username.encode()).hexdigest()[:16]}"
+    user = await user_manager.get_user(user_id)
+
+    if not user:
+        user = await user_manager.create_or_update_from_linuxdo(
+            linuxdo_id=user_id,
+            username=username,
+            display_name=settings.LOCAL_AUTH_DISPLAY_NAME,
+            avatar_url=None,
+            trust_level=9
+        )
+        logger.info(f"[自动登录] 已创建本地用户: {user.user_id}")
+
+    if settings.LOCAL_AUTH_PASSWORD and not await password_manager.has_password(user.user_id):
+        await password_manager.set_password(user.user_id, username, settings.LOCAL_AUTH_PASSWORD)
+        logger.info(f"[自动登录] 已为本地用户 {user.user_id} 初始化密码")
+
+    return user
+
+
 @router.get("/config")
 async def get_auth_config():
     """获取认证配置信息"""
@@ -333,6 +362,7 @@ async def get_auth_config():
         "linuxdo_enabled": bool(settings.LINUXDO_CLIENT_ID and settings.LINUXDO_CLIENT_SECRET),
         "email_auth_enabled": runtime["email_auth_enabled"],
         "email_register_enabled": runtime["email_register_enabled"],
+        "auto_login_enabled": settings.AUTO_LOGIN_ENABLED,
     }
 
 
@@ -378,22 +408,15 @@ async def local_login(request: LocalLoginRequest, response: Response):
             if request.username != settings.LOCAL_AUTH_USERNAME or request.password != settings.LOCAL_AUTH_PASSWORD:
                 raise HTTPException(status_code=401, detail="用户名或密码错误")
 
-            user = await user_manager.create_or_update_from_linuxdo(
-                linuxdo_id=user_id,
-                username=request.username,
-                display_name=settings.LOCAL_AUTH_DISPLAY_NAME,
-                avatar_url=None,
-                trust_level=9
-            )
-
-            await password_manager.set_password(user.user_id, request.username, request.password)
-            logger.info(f"[本地登录] 管理员用户 {user.user_id} 初始密码已设置到数据库")
+            user = await _ensure_local_env_user()
+            logger.info(f"[本地登录] 管理员用户 {user.user_id} 初始信息已同步到数据库")
         else:
             if not await password_manager.verify_password(user.user_id, request.password):
                 raise HTTPException(status_code=401, detail="用户名或密码错误")
 
             logger.info(f"[本地登录] 管理员用户 {user.user_id} 登录成功")
 
+    await _touch_user_last_login(user.user_id)
     _set_login_cookies(response, user.user_id)
     logger.info(f"✅ [登录] 用户 {user.user_id} 登录成功，会话有效期 {settings.SESSION_EXPIRE_MINUTES} 分钟")
 
@@ -569,6 +592,24 @@ async def email_login(request: EmailLoginRequest, response: Response):
     return LocalLoginResponse(
         success=True,
         message="登录成功",
+        user=user.dict()
+    )
+
+
+@router.post("/auto-login", response_model=LocalLoginResponse)
+async def auto_login(response: Response):
+    """开发环境自动登录，仅用于本地自用场景。"""
+    if not settings.AUTO_LOGIN_ENABLED:
+        raise HTTPException(status_code=403, detail="自动登录未启用")
+
+    user = await _ensure_local_env_user()
+    await _touch_user_last_login(user.user_id)
+    _set_login_cookies(response, user.user_id)
+
+    logger.info(f"✅ [自动登录] 用户 {user.user_id} 自动登录成功")
+    return LocalLoginResponse(
+        success=True,
+        message="自动登录成功",
         user=user.dict()
     )
 
