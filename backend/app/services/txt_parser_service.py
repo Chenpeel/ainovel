@@ -13,10 +13,22 @@ class TxtParserService:
     """TXT 解析服务（规则优先）"""
 
     STRONG_CHAPTER_PATTERNS = [
-        re.compile(r"^第[一二三四五六七八九十百千万零〇两\d]+[章节回卷集部篇].*$"),
+        re.compile(r"^第[一二三四五六七八九十百千万零〇两\d]+[章节回集部篇].*$"),
         re.compile(r"^chapter\s*\d+.*$", re.IGNORECASE),
         re.compile(r"^chap\.\s*\d+.*$", re.IGNORECASE),
     ]
+    SPECIAL_CHAPTER_PATTERNS = [
+        re.compile(r"^(序章|楔子|引子|前言|序|终章|終章|尾声|尾聲)\s*$"),
+        re.compile(r"^番外(?:\s*\d+)?(?:\s*[:：].*)?$"),
+    ]
+    META_SECTION_PATTERNS = [
+        re.compile(r"^[（(]\s*本章完\s*[)）]$"),
+        re.compile(r"^第[一二三四五六七八九十百千万零〇两\d]+卷.*$"),
+        re.compile(r"^(完结感言|完結感言|上架感言|关于番外|關于番外|白金了|单章|單章)$"),
+        re.compile(r"^(新书|新書|感谢|感謝|番外更新|更新说明).*$"),
+    ]
+    SEPARATOR_PATTERN = re.compile(r"^[\-—_=~～·•.。…]{3,}$")
+    QUOTED_OR_BRACKETED_PATTERN = re.compile(r'^[“"「『（(《〈【\[].*[”"」』）)》〉】\]]$')
 
     def decode_bytes(self, content: bytes) -> tuple[str, str]:
         """
@@ -56,12 +68,16 @@ class TxtParserService:
 
         lines = text.split("\n")
         heading_indexes: list[int] = []
+        meta_section_indexes: list[int] = []
 
         for idx, line in enumerate(lines):
             stripped = line.strip()
             if not stripped:
                 continue
-            if self._is_strong_heading(stripped) or self._is_weak_heading(lines, idx):
+            if self._is_meta_section(stripped):
+                meta_section_indexes.append(idx)
+                continue
+            if self._is_strong_heading(stripped) or self._is_special_heading(stripped):
                 heading_indexes.append(idx)
 
         # 去重并排序
@@ -90,8 +106,11 @@ class TxtParserService:
 
         for i, start_idx in enumerate(heading_indexes):
             end_idx = heading_indexes[i + 1] if i + 1 < len(heading_indexes) else len(lines)
+            meta_break = next((meta_idx for meta_idx in meta_section_indexes if start_idx < meta_idx < end_idx), None)
+            if meta_break is not None:
+                end_idx = meta_break
             title = lines[start_idx].strip()[:200] or f"第{chapter_no}章"
-            body = "\n".join(lines[start_idx + 1 : end_idx]).strip()
+            body = self._build_chapter_body(lines[start_idx + 1 : end_idx])
             # 防止空标题/空正文完全丢失
             if not body and i + 1 < len(heading_indexes):
                 next_line = lines[start_idx + 1].strip() if start_idx + 1 < len(lines) else ""
@@ -116,16 +135,37 @@ class TxtParserService:
     def _is_strong_heading(self, line: str) -> bool:
         return any(pattern.match(line) for pattern in self.STRONG_CHAPTER_PATTERNS)
 
+    def _is_special_heading(self, line: str) -> bool:
+        return any(pattern.match(line) for pattern in self.SPECIAL_CHAPTER_PATTERNS)
+
+    def _is_meta_section(self, line: str) -> bool:
+        return any(pattern.match(line) for pattern in self.META_SECTION_PATTERNS)
+
+    def _build_chapter_body(self, body_lines: list[str]) -> str:
+        filtered_lines = [
+            line for line in body_lines
+            if not re.match(r"^[（(]\s*本章完\s*[)）]$", line.strip())
+        ]
+        return "\n".join(filtered_lines).strip()
+
     def _is_weak_heading(self, lines: list[str], idx: int) -> bool:
         """
-        弱模式：短行 + 前后空行 + 避免普通句子误判
+        弱模式：短行 + 前后空行 + 明显排除章节结束语/感言/对白/分隔线等误判
         """
         line = lines[idx].strip()
         if not line:
             return False
         if len(line) > 25:
             return False
+        if self._is_meta_section(line):
+            return False
         if re.search(r"[，。！？；：,.!?;:]", line):
+            return False
+        if self.SEPARATOR_PATTERN.match(line):
+            return False
+        if self.QUOTED_OR_BRACKETED_PATTERN.match(line):
+            return False
+        if re.search(r"[“”\"「」『』（）()《》〈〉【】\[\]]", line):
             return False
 
         prev_blank = idx == 0 or not lines[idx - 1].strip()
