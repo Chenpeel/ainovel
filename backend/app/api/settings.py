@@ -52,6 +52,11 @@ def read_env_defaults() -> Dict[str, Any]:
     }
 
 
+def preserve_provider_alias(provider: Optional[str]) -> Optional[str]:
+    """保存用户选择的 provider 别名，避免 DeepSeek / MuMu 在 UI 中被显示成 OpenAI。"""
+    return provider
+
+
 def require_login(request: Request):
     """依赖：要求用户已登录"""
     if not hasattr(request.state, "user") or not request.state.user:
@@ -1054,7 +1059,7 @@ async def create_preset(
         "created_at": datetime.now().isoformat(),
         "config": {
             **data.config.model_dump(),
-            "api_provider": normalize_provider(data.config.api_provider)
+            "api_provider": preserve_provider_alias(data.config.api_provider)
         }
     }
     
@@ -1107,7 +1112,7 @@ async def update_preset(
     if data.config is not None:
         target_preset['config'] = {
             **data.config.model_dump(),
-            'api_provider': normalize_provider(data.config.api_provider)
+            'api_provider': preserve_provider_alias(data.config.api_provider)
         }
     
     # 保存回preferences
@@ -1194,7 +1199,7 @@ async def activate_preset(
     
     # 应用配置到Settings主字段
     config = target_preset['config']
-    settings.api_provider = normalize_provider(config['api_provider'])
+    settings.api_provider = preserve_provider_alias(config['api_provider'])
     settings.api_key = config['api_key']
     settings.api_base_url = config.get('api_base_url')
     settings.llm_model = config['llm_model']
@@ -1277,7 +1282,7 @@ async def create_preset_from_current(
     
     # 从当前Settings主字段读取配置
     current_config = APIKeyPresetConfig(
-        api_provider=normalize_provider(settings.api_provider),
+        api_provider=preserve_provider_alias(settings.api_provider),
         api_key=settings.api_key,
         api_base_url=settings.api_base_url,
         llm_model=settings.llm_model,

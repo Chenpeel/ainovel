@@ -1,6 +1,7 @@
 services:
   postgres:
-    image: postgres:18-alpine
+    image: ${POSTGRES_IMAGE:-postgres:18-alpine}
+    platform: ${DOCKER_PLATFORM:-linux/arm64/v8}
     container_name: mumuainovel-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-mumuai_novel}
@@ -53,6 +54,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        USE_CN_MIRROR: ${USE_CN_MIRROR:-false}
+        NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.11-slim}
+    platform: ${DOCKER_PLATFORM:-linux/arm64/v8}
     image: mumujie/mumuainovel:latest
     container_name: mumuainovel
     depends_on:

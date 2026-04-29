@@ -3,9 +3,11 @@
 
 # 构建参数
 ARG USE_CN_MIRROR=false
+ARG NODE_IMAGE=node:22-alpine
+ARG PYTHON_IMAGE=python:3.11-slim
 
 # 阶段1: 构建前端
-FROM node:22-alpine AS frontend-builder
+FROM ${NODE_IMAGE} AS frontend-builder
 
 ARG USE_CN_MIRROR
 
@@ -19,11 +21,11 @@ RUN if [ "$USE_CN_MIRROR" = "true" ]; then \
         npm config set registry https://registry.npmmirror.com; \
     fi
 
-# 删除 package-lock.json 以避免因镜像源不一致导致的 404 错误
-RUN rm -f package-lock.json
+# 默认保留 lock 文件保证依赖可重复，只有在国内镜像模式下才回退到无锁安装
+RUN if [ "$USE_CN_MIRROR" = "true" ]; then rm -f package-lock.json; fi
 
 # 安装依赖
-RUN npm install
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 # 复制前端源代码
 COPY frontend/ ./
@@ -35,7 +37,7 @@ RUN sed -i "s|outDir: '../backend/static'|outDir: 'dist'|g" vite.config.ts
 RUN npm run build
 
 # 阶段2: 构建最终镜像
-FROM python:3.11-slim
+FROM ${PYTHON_IMAGE}
 
 ARG USE_CN_MIRROR
 ARG TARGETPLATFORM
