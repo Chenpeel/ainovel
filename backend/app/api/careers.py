@@ -7,7 +7,7 @@ import json
 from typing import AsyncGenerator
 
 from app.database import get_db
-from app.utils.sse_response import SSEResponse, create_sse_response, WizardProgressTracker
+from app.utils.sse_response import SSEResponse, create_sse_response, WizardProgressTracker, wrap_stream_with_heartbeat, HEARTBEAT
 from app.models.career import Career, CharacterCareer
 from app.models.character import Character
 from app.models.project import Project
@@ -25,6 +25,7 @@ from app.schemas.career import (
     CareerStage
 )
 from app.services.ai_service import AIService
+from app.services.json_helper import loads_json
 from app.logger import get_logger
 from app.api.settings import get_user_ai_service
 from app.api.common import verify_project_access
@@ -316,7 +317,14 @@ async def generate_career_system(
                 chunk_count = 0
                 estimated_total = max(3000, len(prompt) * 8)
                 
-                async for chunk in user_ai_service.generate_text_stream(prompt=prompt):
+                async for chunk in wrap_stream_with_heartbeat(
+                    user_ai_service.generate_text_stream(prompt=prompt),
+                    heartbeat_interval=15.0,
+                ):
+                    if chunk is HEARTBEAT:
+                        yield await tracker.heartbeat()
+                        continue
+
                     chunk_count += 1
                     ai_response += chunk
                     
@@ -345,7 +353,7 @@ async def generate_career_system(
             # 清洗并解析JSON
             try:
                 cleaned_response = user_ai_service._clean_json_response(ai_response)
-                career_data = json.loads(cleaned_response)
+                career_data = loads_json(cleaned_response)
                 logger.info(f"✅ 职业体系JSON解析成功")
             except json.JSONDecodeError as e:
                 logger.error(f"❌ 职业体系JSON解析失败: {e}")
