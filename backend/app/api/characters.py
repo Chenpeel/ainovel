@@ -953,8 +953,9 @@ async def generate_character_stream(
                         prompt=prompt,
                         tool_choice="required",
                     ),
-                    heartbeat_interval=15.0,
+                    heartbeat_interval=15.0
                 ):
+                    # 心跳哨兵：发送心跳保活，不混入AI响应
                     if chunk is HEARTBEAT:
                         yield await tracker.heartbeat()
                         continue

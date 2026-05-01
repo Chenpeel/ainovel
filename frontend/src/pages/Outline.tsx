@@ -2,9 +2,12 @@
 import { Button, List, Modal, Form, Input, message, Empty, Space, Popconfirm, Card, Select, Radio, Tag, InputNumber, Tabs, Pagination, theme } from 'antd';
 import { EditOutlined, DeleteOutlined, ThunderboltOutlined, BranchesOutlined, AppstoreAddOutlined, CheckCircleOutlined, ExclamationCircleOutlined, PlusOutlined, FileTextOutlined } from '@ant-design/icons';
 import { useStore } from '../store';
+import { eventBus } from '../store/eventBus';
+import { getProjectTasks, type TaskStatus } from '../services/backgroundTaskService';
 import { useOutlineSync } from '../store/hooks';
 import { SSEPostClient } from '../utils/sseClient';
 import { SSEProgressModal } from '../components/SSEProgressModal';
+import { generateOutlineBackground } from '../services/backgroundTaskService';
 import { outlineApi, chapterApi, projectApi, characterApi } from '../services/api';
 import type { OutlineExpansionResponse, BatchOutlineExpansionResponse, ChapterPlanItem, ApiError, Character } from '../types';
 
@@ -154,6 +157,8 @@ export default function Outline() {
   const [sseMessage, setSSEMessage] = useState('');
   const [sseModalVisible, setSSEModalVisible] = useState(false);
 
+
+
   useEffect(() => {
     const handleResize = () => {
       setIsMobile(window.innerWidth <= 768);
@@ -181,9 +186,25 @@ export default function Outline() {
       refreshOutlines();
       // 加载项目角色列表
       loadProjectCharacters();
+      // 检查是否有活跃的大纲生成任务，恢复按钮禁用状态
+      checkActiveOutlineTasks();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProject?.id]); // 只依赖 ID，不依赖函数
+
+  // 检查是否有活跃的大纲生成任务（页面切换后恢复状态）
+  const checkActiveOutlineTasks = async () => {
+    if (!currentProject?.id) return;
+    try {
+      const result = await getProjectTasks(currentProject.id, 'outline_new', 5);
+      const result2 = await getProjectTasks(currentProject.id, 'outline_continue', 5);
+      const allTasks = [...(result.items || []), ...(result2.items || [])];
+      const hasActive = allTasks.some((t: TaskStatus) => t.status === 'running' || t.status === 'pending');
+      setIsGenerating(hasActive);
+    } catch (error) {
+      console.error('检查活跃大纲任务失败:', error);
+    }
+  };
 
   // 加载项目角色列表
   const loadProjectCharacters = async () => {
@@ -537,11 +558,6 @@ export default function Outline() {
       // 关闭生成表单Modal
       Modal.destroyAll();
 
-      // 显示进度Modal
-      setSSEProgress(0);
-      setSSEMessage('正在连接AI服务...');
-      setSSEModalVisible(true);
-
       // 准备请求数据
       const requestData: OutlineGenerateRequestData = {
         project_id: currentProject.id,
@@ -573,38 +589,31 @@ export default function Outline() {
       console.log('6. 最终请求数据:', JSON.stringify(requestData, null, 2));
       console.log('=========================');
 
-      // 使用SSE客户端
-      const apiUrl = `/api/outlines/generate-stream`;
-      const client = new SSEPostClient(apiUrl, requestData, {
-        onProgress: (msg: string, progress: number) => {
-          setSSEMessage(msg);
-          setSSEProgress(progress);
+      // 使用后台任务生成（不怕断连，关闭浏览器也继续运行）
+      // 不再强制显示进度弹窗，任务进度在右下角悬浮任务框中显示
+      await generateOutlineBackground(
+        requestData,
+        () => {
+          // 进度更新由悬浮任务框处理，无需额外操作
         },
-        onResult: (data: unknown) => {
-          console.log('生成完成，结果:', data);
-        },
-        onError: (error: string) => {
-          // 现在只处理真正的错误
-          message.error(`生成失败: ${error}`);
-          setSSEModalVisible(false);
+        (result) => {
+          message.success(result.task_result?.message as string || '大纲生成完成！');
           setIsGenerating(false);
-        },
-        onComplete: () => {
-          message.success('大纲生成完成！');
-          setSSEModalVisible(false);
-          setIsGenerating(false);
-          // 刷新大纲列表
           refreshOutlines();
+        },
+        (error) => {
+          message.error(`生成失败: ${error}`);
+          setIsGenerating(false);
         }
-      });
+      );
 
-      // 开始连接
-      client.connect();
+      message.info('大纲生成任务已提交，可在右下角任务面板查看进度');
+      // 通知悬浮任务框刷新
+      eventBus.emit('background-task-created');
 
     } catch (error) {
       console.error('AI生成失败:', error);
       message.error('AI生成失败');
-      setSSEModalVisible(false);
       setIsGenerating(false);
     }
   };
@@ -1923,7 +1932,12 @@ export default function Outline() {
         visible={sseModalVisible}
         progress={sseProgress}
         message={sseMessage}
-        title="AI生成中..."
+        title="AI生成中（后台运行，可关闭页面）..."
+        onCancel={() => {
+          setSSEModalVisible(false);
+          setIsExpanding(false);
+          message.info('已取消操作');
+        }}
       />
 
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>

@@ -389,48 +389,39 @@ async def create_sse_generator(
 
 
 class _HeartbeatSentinel:
-    """心跳哨兵对象，用于标识心跳事件（非 AI 内容）。"""
-
+    """心跳哨兵对象，用于标识心跳事件（非AI内容）"""
+    pass
 
 HEARTBEAT = _HeartbeatSentinel()
 
 
 async def wrap_stream_with_heartbeat(
     async_gen: AsyncGenerator,
-    heartbeat_interval: float = 15.0,
+    heartbeat_interval: float = 15.0
 ) -> AsyncGenerator:
     """
-    包装异步生成器，在等待下一个 chunk 期间按间隔产出心跳哨兵。
-
-    这和“每 N 个 chunk 才发一次心跳”不同，它能覆盖模型长时间无输出的场景，
-    避免反向代理或浏览器因为连接空闲而提前断开。
+    包装异步生成器，在等待数据时产生心跳哨兵，防止连接超时断开。
+    
+    用法：
+        async for chunk in wrap_stream_with_heartbeat(
+            ai_service.generate_text_stream(prompt), 
+            heartbeat_interval=15
+        ):
+            if chunk is HEARTBEAT:
+                yield await tracker.heartbeat()
+                continue
+            # chunk 是原始AI数据
     """
     ait = async_gen.__aiter__()
-    pending_task = asyncio.create_task(ait.__anext__())
-
-    try:
-        while True:
-            done, _ = await asyncio.wait({pending_task}, timeout=heartbeat_interval)
-
-            if pending_task in done:
-                try:
-                    item = pending_task.result()
-                except StopAsyncIteration:
-                    return
-
-                yield item
-                pending_task = asyncio.create_task(ait.__anext__())
-            else:
-                yield HEARTBEAT
-    finally:
-        if pending_task and not pending_task.done():
-            pending_task.cancel()
-            try:
-                await pending_task
-            except asyncio.CancelledError:
-                pass
-            except StopAsyncIteration:
-                pass
+    while True:
+        try:
+            item = await asyncio.wait_for(ait.__anext__(), timeout=heartbeat_interval)
+            yield item
+        except asyncio.TimeoutError:
+            # 等待超时，产生心跳哨兵
+            yield HEARTBEAT
+        except StopAsyncIteration:
+            return
 
 
 def create_sse_response(generator: AsyncGenerator[str, None]) -> StreamingResponse:

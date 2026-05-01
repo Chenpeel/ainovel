@@ -62,10 +62,10 @@ async def _register_plugin_background(
     后台任务：注册MCP插件并更新数据库状态（带重试）
 
     在独立的任务中执行MCP连接，避免阻塞请求处理。
-    连接失败时自动重试，提高对临时网络问题的容错性。
+    连接失败时会自动重试，提高对临时网络问题的容错性。
     """
     last_error = None
-
+    
     for attempt in range(max_retries + 1):
         try:
             if attempt > 0:
@@ -88,9 +88,9 @@ async def _register_plugin_background(
                 success = False
 
             if success:
+                # 更新数据库状态为active
                 engine = await get_engine(user_id)
                 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
                 async with AsyncSessionLocal() as db:
                     stmt = (
                         update(MCPPlugin)
@@ -99,19 +99,16 @@ async def _register_plugin_background(
                     )
                     await db.execute(stmt)
                     await db.commit()
-
                 logger.info(f"后台注册MCP插件成功: {plugin_name}")
                 return
-
-            last_error = "连接失败"
-
+            else:
+                last_error = "连接失败"
+                
         except Exception as e:
             last_error = str(e)
-            logger.warning(
-                f"后台注册MCP插件异常 (尝试 {attempt + 1}/{max_retries + 1}): "
-                f"{plugin_name}, 错误: {e}"
-            )
-
+            logger.warning(f"后台注册MCP插件异常 (尝试 {attempt + 1}/{max_retries + 1}): {plugin_name}, 错误: {e}")
+    
+    # 所有重试都失败，更新数据库状态为error
     logger.error(f"后台注册MCP插件最终失败 (已重试{max_retries}次): {plugin_name}, 错误: {last_error}")
     try:
         engine = await get_engine(user_id)
@@ -120,7 +117,7 @@ async def _register_plugin_background(
             stmt = (
                 update(MCPPlugin)
                 .where(MCPPlugin.user_id == user_id, MCPPlugin.plugin_name == plugin_name)
-                .values(status="error", last_error=last_error or "连接失败")
+                .values(status="error", last_error=str(last_error)[:500] if last_error else "连接失败")
             )
             await db.execute(stmt)
             await db.commit()
@@ -231,11 +228,11 @@ async def create_plugin(
     # 如果启用，设为pending状态等待后台连接
     if plugin.enabled:
         plugin.status = "pending"
-
+    
     db.add(plugin)
     await db.commit()
     await db.refresh(plugin)
-
+    
     # 如果启用，后台注册到统一门面（避免MCP操作阻塞导致超时）
     if plugin.enabled:
         asyncio.create_task(_register_plugin_background(
@@ -246,7 +243,7 @@ async def create_plugin(
             headers=plugin.headers,
             config=plugin.config
         ))
-
+    
     logger.info(f"用户 {user.user_id} 创建插件: {plugin.plugin_name}（MCP注册在后台执行）")
     return plugin
 
@@ -454,7 +451,7 @@ async def update_plugin(
         )
     for key, value in update_data.items():
         setattr(plugin, key, value)
-
+    
     # 如果启用，设为pending状态等待后台连接
     if plugin.enabled:
         plugin.status = "pending"
@@ -465,7 +462,9 @@ async def update_plugin(
     
     # 如果插件已启用，后台重新注册MCP连接
     if plugin.enabled:
+        # 先后台注销旧连接
         asyncio.create_task(_unregister_plugin_safe(user.user_id, plugin.plugin_name))
+        # 再后台注册新连接
         asyncio.create_task(_register_plugin_background(
             user_id=user.user_id,
             plugin_name=plugin.plugin_name,
@@ -503,10 +502,10 @@ async def delete_plugin(
     plugin_name = plugin.plugin_name
     user_id = user.user_id
     
-    # 删除数据库记录
+    # 先删除数据库记录
     await db.delete(plugin)
     await db.commit()
-
+    
     # 后台从统一门面注销（避免MCP操作阻塞导致超时）
     asyncio.create_task(_unregister_plugin_safe(user_id, plugin_name))
     
@@ -523,7 +522,7 @@ async def toggle_plugin(
 ):
     """
     启用或禁用插件
-
+    
     启用时：先更新数据库状态为pending，再通过后台任务注册MCP连接，
     避免长时间持有数据库会话导致超时。
     禁用时：先更新数据库状态，再通过后台任务注销MCP连接。

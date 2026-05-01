@@ -2,14 +2,15 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { List, Button, Modal, Form, Input, Select, message, Empty, Space, Badge, Tag, Card, InputNumber, Alert, Radio, Descriptions, Collapse, Popconfirm, Pagination, theme } from 'antd';
 import { EditOutlined, FileTextOutlined, ThunderboltOutlined, LockOutlined, DownloadOutlined, SettingOutlined, FundOutlined, SyncOutlined, CheckCircleOutlined, CloseCircleOutlined, RocketOutlined, StopOutlined, InfoCircleOutlined, CaretRightOutlined, DeleteOutlined, BookOutlined, FormOutlined, PlusOutlined, ReadOutlined } from '@ant-design/icons';
 import { useStore } from '../store';
+import { eventBus } from '../store/eventBus';
 import { useChapterSync } from '../store/hooks';
+import { generateChapterBackground } from '../services/backgroundTaskService';
 import { projectApi, writingStyleApi, chapterApi } from '../services/api';
 import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, ExpansionPlanData } from '../types';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import ChapterAnalysis from '../components/ChapterAnalysis';
 import ExpansionPlanEditor from '../components/ExpansionPlanEditor';
 import { SSELoadingOverlay } from '../components/SSELoadingOverlay';
-import { SSEProgressModal } from '../components/SSEProgressModal';
 import ChapterReader from '../components/ChapterReader';
 import PartialRegenerateToolbar from '../components/PartialRegenerateToolbar';
 import PartialRegenerateModal from '../components/PartialRegenerateModal';
@@ -100,6 +101,7 @@ export default function Chapters() {
   const [generationComparisonVisible, setGenerationComparisonVisible] = useState(false);
   const [generationComparisonOriginalContent, setGenerationComparisonOriginalContent] = useState('');
   const [generationComparisonNewContent, setGenerationComparisonNewContent] = useState('');
+
 
   // 批量生成相关状态
   const [batchGenerateVisible, setBatchGenerateVisible] = useState(false);
@@ -527,7 +529,7 @@ export default function Chapters() {
       if (data.has_active_task && data.task) {
         const task = data.task;
 
-        // 恢复任务状态
+        // 恢复任务状态（只在顶部进度条显示，不弹出Modal）
         setBatchTaskId(task.batch_id);
         setBatchProgress({
           status: task.status,
@@ -536,12 +538,12 @@ export default function Chapters() {
           current_chapter_number: task.current_chapter_number,
         });
         setBatchGenerating(true);
-        setBatchGenerateVisible(true);
+        // 不设置 setBatchGenerateVisible(true)，避免弹出Modal遮挡页面
 
         // 启动轮询
         startBatchPolling(task.batch_id);
 
-        message.info('检测到未完成的批量生成任务，已自动恢复');
+        message.info('检测到未完成的批量生成任务，请查看任务列表');
       }
     } catch (error) {
       console.error('检查批量生成任务失败:', error);
@@ -998,9 +1000,52 @@ export default function Chapters() {
     });
   };
 
+
+  // 后台生成章节（关闭浏览器也不影响）
+  // 不再强制显示进度弹窗，任务进度在右下角悬浮任务框中显示
+  const handleBackgroundGenerate = async () => {
+    if (!editingId) return;
+    if (!selectedStyleId) {
+      message.error("请先选择写作风格");
+      return;
+    }
+
+    try {
+      await generateChapterBackground(
+        editingId,
+        {
+          style_id: selectedStyleId,
+          target_word_count: targetWordCount,
+          model: selectedModel,
+          narrative_perspective: temporaryNarrativePerspective,
+        },
+        () => {
+          // 进度更新由悬浮任务框处理，无需额外操作
+        },
+        (_) => {
+          message.success("后台章节生成完成！");
+          refreshChapters();
+          if (currentProject) {
+            projectApi.getProject(currentProject.id).then(setCurrentProject).catch(console.error);
+          }
+          loadAnalysisTasks();
+        },
+        (error) => {
+          message.error("后台生成失败: " + error);
+        }
+      );
+
+      message.info("章节生成任务已提交，可在右下角任务面板查看进度");
+      // 通知悬浮任务框刷新
+      eventBus.emit('background-task-created');
+    } catch (error) {
+      message.error("创建后台任务失败");
+    }
+  };
   const getStatusColor = (status: string) => {
     const colors: Record<string, string> = {
       'draft': 'default',
+      'pending': 'warning',
       'writing': 'processing',
       'completed': 'success',
     };
@@ -1010,6 +1055,7 @@ export default function Chapters() {
   const getStatusText = (status: string) => {
     const texts: Record<string, string> = {
       'draft': '草稿',
+      'pending': '待处理',
       'writing': '创作中',
       'completed': '已完成',
     };
@@ -1110,7 +1156,7 @@ export default function Chapters() {
 
     try {
       setBatchGenerating(true);
-      setBatchGenerateVisible(false); // 关闭配置对话框，避免遮挡进度弹窗
+      setBatchGenerateVisible(false); // 关闭配置对话框，任务进度在悬浮任务框中显示
 
       const requestBody: {
         start_chapter_number: number;
@@ -1160,7 +1206,9 @@ export default function Chapters() {
         estimated_time_minutes: result.estimated_time_minutes,
       });
 
-      message.success(`批量生成任务已创建，预计需要 ${result.estimated_time_minutes} 分钟`);
+      message.success(`批量生成任务已创建，预计需要 ${result.estimated_time_minutes} 分钟，可在右下角任务面板查看进度`);
+      // 通知悬浮任务框刷新
+      eventBus.emit('background-task-created');
 
       // 🔔 触发浏览器通知（任务开始）
       showBrowserNotification(
@@ -1414,6 +1462,7 @@ export default function Chapters() {
           >
             <Select>
               <Select.Option value="draft">草稿</Select.Option>
+              <Select.Option value="pending">待处理</Select.Option>
               <Select.Option value="writing">创作中</Select.Option>
               <Select.Option value="completed">已完成</Select.Option>
             </Select>
@@ -1962,12 +2011,13 @@ export default function Chapters() {
             type="primary"
             icon={<RocketOutlined />}
             onClick={handleOpenBatchGenerate}
-            disabled={chapters.length === 0}
+            disabled={chapters.length === 0 || batchGenerating}
+            loading={batchGenerating}
             block={isMobile}
             size={isMobile ? 'middle' : 'middle'}
-            style={{ background: token.colorInfo, borderColor: token.colorInfo }}
+            style={batchGenerating ? {} : { background: token.colorInfo, borderColor: token.colorInfo }}
           >
-            批量生成
+            {batchGenerating ? '生成中...' : '批量生成'}
           </Button>
           <Button
             type="default"
@@ -1981,6 +2031,7 @@ export default function Chapters() {
           </Button>
         </Space>
       </div>
+
 
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
         {chapters.length === 0 ? (
@@ -2462,6 +2513,7 @@ export default function Chapters() {
           <Form.Item label="状态" name="status">
             <Select placeholder="选择状态">
               <Select.Option value="draft">草稿</Select.Option>
+              <Select.Option value="pending">待处理</Select.Option>
               <Select.Option value="writing">创作中</Select.Option>
               <Select.Option value="completed">已完成</Select.Option>
             </Select>
@@ -2524,6 +2576,7 @@ export default function Chapters() {
                 const disabledReason = currentChapter ? getGenerateDisabledReason(currentChapter) : '';
 
                 return (
+                  <>
                   <Button
                     type="primary"
                     icon={canGenerate ? <ThunderboltOutlined /> : <LockOutlined />}
@@ -2532,14 +2585,25 @@ export default function Chapters() {
                     disabled={!canGenerate}
                     danger={!canGenerate}
                     style={{ fontWeight: 'bold' }}
-                    title={!canGenerate ? disabledReason : '根据大纲和前置章节内容创作'}
+                    title={!canGenerate ? disabledReason : '根据大纲和前置章节内容创作（流式）'}
                   >
                     {isMobile ? 'AI' : 'AI创作'}
                   </Button>
+                  <Button
+                    icon={<RocketOutlined />}
+                    onClick={handleBackgroundGenerate}
+                    disabled={!canGenerate || isContinuing}
+                    style={{ fontWeight: 'bold' }}
+                    title={!canGenerate ? disabledReason : '后台生成：关闭浏览器也不影响，完成后自动保存'}
+                  >
+                    {isMobile ? '后台' : '后台生成'}
+                  </Button>
+                  </>
                 );
               })()}
             </Space.Compact>
           </Form.Item>
+
 
           {/* 第一行：写作风格 + 叙事角度 */}
           <div style={{
@@ -2959,30 +3023,6 @@ export default function Chapters() {
         loading={isGenerating}
         progress={singleChapterProgress}
         message={singleChapterProgressMessage}
-      />
-
-      {/* 批量生成进度显示 - 使用统一的进度组件 */}
-      <SSEProgressModal
-        visible={batchGenerating}
-        progress={batchProgress ? Math.round((batchProgress.completed / batchProgress.total) * 100) : 0}
-        message={
-          batchProgress?.current_chapter_number
-            ? `正在生成第 ${batchProgress.current_chapter_number} 章... (${batchProgress.completed}/${batchProgress.total})`
-            : `批量生成进行中... (${batchProgress?.completed || 0}/${batchProgress?.total || 0})`
-        }
-        title="批量生成章节"
-        onCancel={() => {
-          modal.confirm({
-            title: '确认取消',
-            content: '确定要取消批量生成吗？已生成的章节将保留。',
-            okText: '确定取消',
-            cancelText: '继续生成',
-            okButtonProps: { danger: true },
-            centered: true,
-            onOk: handleCancelBatchGenerate,
-          });
-        }}
-        cancelButtonText="取消任务"
       />
 
       {/* 章节阅读器 */}

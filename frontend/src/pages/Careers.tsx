@@ -172,7 +172,7 @@ export default function Careers() {
         try {
             const userRequirements = values.user_requirements?.trim() || '';
 
-            // 使用 fetch + POST 替代 EventSource GET，避免长需求文本导致 URL 过长
+            // 使用 fetch + POST 替代 EventSource GET，避免 URL 长度限制
             const response = await fetch('/api/careers/generate-system', {
                 method: 'POST',
                 headers: {
