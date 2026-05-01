@@ -99,6 +99,11 @@ export default function Characters() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState('');
+  const [isBatchGenerating, setIsBatchGenerating] = useState(false);
+  const [batchProgress, setBatchProgress] = useState(0);
+  const [batchProgressMessage, setBatchProgressMessage] = useState('');
+  const [showBatchModal, setShowBatchModal] = useState(false);
+  const [batchGenerateForm] = Form.useForm();
   const [activeTab, setActiveTab] = useState<'all' | 'character' | 'organization'>('all');
   const [generateForm] = Form.useForm();
   const [generateOrgForm] = Form.useForm();
@@ -196,6 +201,51 @@ export default function Characters() {
         setIsGenerating(false);
         setProgress(0);
         setProgressMessage('');
+      }, 500);
+    }
+  };
+
+  const handleBatchGenerate = async (values: { count: number; requirements?: string }) => {
+    if (!currentProject) return;
+    setShowBatchModal(false);
+    setIsBatchGenerating(true);
+    setBatchProgress(0);
+    setBatchProgressMessage('准备批量生成...');
+
+    const client = new SSEPostClient(
+      '/api/characters/batch-generate-stream',
+      {
+        project_id: currentProject.id,
+        count: values.count,
+        requirements: values.requirements,
+      },
+      {
+        onProgress: (msg, prog) => {
+          setBatchProgress(prog);
+          setBatchProgressMessage(msg);
+        },
+        onError: (error) => {
+          message.error(`批量生成失败: ${error}`);
+        },
+        onComplete: () => {
+          setBatchProgress(100);
+          setBatchProgressMessage('生成完成！');
+        },
+      }
+    );
+
+    try {
+      await client.connect();
+      message.success('批量生成角色成功');
+      await refreshCharacters();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : '批量生成失败';
+      if (!msg.includes('abort')) message.error(msg);
+    } finally {
+      setTimeout(() => {
+        setIsBatchGenerating(false);
+        setBatchProgress(0);
+        setBatchProgressMessage('');
       }, 500);
     }
   };
@@ -682,6 +732,15 @@ export default function Characters() {
             size={isMobile ? 'small' : 'middle'}
           >
             AI生成组织
+          </Button>
+          <Button
+            type="primary"
+            icon={<ThunderboltOutlined />}
+            onClick={() => setShowBatchModal(true)}
+            loading={isBatchGenerating}
+            size={isMobile ? 'small' : 'middle'}
+          >
+            批量生成
           </Button>
           <Button
             icon={<ImportOutlined />}
@@ -1560,6 +1619,40 @@ export default function Characters() {
         progress={progress}
         message={progressMessage}
       />
+      <SSELoadingOverlay
+        loading={isBatchGenerating}
+        progress={batchProgress}
+        message={batchProgressMessage}
+      />
+
+      {/* 批量生成角色 Modal */}
+      <Modal
+        title="批量生成角色"
+        open={showBatchModal}
+        onCancel={() => setShowBatchModal(false)}
+        onOk={() => batchGenerateForm.validateFields().then(handleBatchGenerate)}
+        okText="开始生成"
+        cancelText="取消"
+        width={480}
+      >
+        <Form
+          form={batchGenerateForm}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+          initialValues={{ count: 5 }}
+        >
+          <Form.Item
+            label="生成数量"
+            name="count"
+            rules={[{ required: true, message: '请输入生成数量' }]}
+          >
+            <InputNumber min={2} max={20} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item label="特殊要求" name="requirements">
+            <Input.TextArea rows={3} placeholder="对角色的特殊要求（可选）..." />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }

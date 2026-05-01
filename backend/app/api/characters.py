@@ -17,7 +17,8 @@ from app.schemas.character import (
     CharacterUpdate,
     CharacterResponse,
     CharacterListResponse,
-    CharacterGenerateRequest
+    CharacterGenerateRequest,
+    CharacterBatchGenerateRequest,
 )
 from app.services.ai_service import AIService
 from app.services.json_helper import loads_json
@@ -1532,3 +1533,34 @@ async def validate_import(
     except Exception as e:
         logger.error(f"验证导入文件失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"验证失败: {str(e)}")
+
+
+@router.post("/batch-generate-stream", summary="批量AI生成角色（SSE流式）")
+async def batch_generate_characters_stream(
+    gen_request: CharacterBatchGenerateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user_ai_service: AIService = Depends(get_user_ai_service),
+):
+    """复用向导的批量生成逻辑，支持分批+重试+MCP，通过SSE返回进度。"""
+    from app.api.wizard_stream import characters_generator
+
+    user_id = getattr(request.state, "user_id", None)
+    project = await verify_project_access(gen_request.project_id, user_id, db)
+
+    data = {
+        "project_id": gen_request.project_id,
+        "count": gen_request.count,
+        "requirements": gen_request.requirements or "",
+        "enable_mcp": gen_request.enable_mcp,
+        "user_id": user_id,
+        "theme": project.theme or "",
+        "genre": project.genre or "",
+        "world_context": {
+            "time_period": project.world_time_period or "",
+            "location": project.world_location or "",
+            "atmosphere": project.world_atmosphere or "",
+            "rules": project.world_rules or "",
+        },
+    }
+    return create_sse_response(characters_generator(data, db, user_ai_service))

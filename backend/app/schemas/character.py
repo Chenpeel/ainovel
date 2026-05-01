@@ -117,6 +117,14 @@ class CharacterGenerateRequest(BaseModel):
     enable_mcp: bool = Field(True, description="是否启用MCP工具增强（搜索人物原型参考）")
 
 
+class CharacterBatchGenerateRequest(BaseModel):
+    """批量AI生成角色的请求模型"""
+    project_id: str = Field(..., description="项目ID")
+    count: int = Field(5, ge=2, le=20, description="生成数量")
+    requirements: Optional[str] = Field(None, description="特殊要求")
+    enable_mcp: bool = Field(True, description="是否启用MCP工具增强")
+
+
 class CharacterListResponse(BaseModel):
     """角色列表响应模型"""
     total: int
