@@ -1,0 +1,16 @@
+# 快速测试镜像 —— 以生产镜像为基础，仅替换代码和前端产物
+# 跳过 npm install / pip install / 模型下载，构建只需几秒
+#
+# 用法（自动检测平台）：
+#   docker build -f Dockerfile.test \
+#     --platform $(docker version --format '{{.Server.Os}}/{{.Server.Arch}}') \
+#     -t mumuainovel:world-map-test .
+
+ARG BASE_IMAGE=mumujie/mumuainovel:latest
+FROM ${BASE_IMAGE}
+
+WORKDIR /app
+
+# 替换全部后端内容（app/ scripts/ alembic/ static/ 等一并更新）
+# static/ 已由宿主机 npm run build 编译至 backend/static/
+COPY backend/ ./
